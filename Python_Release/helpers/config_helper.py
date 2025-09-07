@@ -13,21 +13,21 @@ from __future__ import annotations
 # =========================
 import os
 import json
-from typing import Dict, Set
+from typing import Dict, Set, Any
 
-from helpers.shell_helper import _tailscale_ip4_self
-from helpers.userid_helper import _userid_from_whois_json, _userid_from_status_by_ip
+from helpers.shell_helper import tailscale_ip4_self
+from helpers.userid_helper import userid_from_whois_json, userid_from_status_by_ip
 # =========================
 
 
-# --- _expand() ---
-def _expand(path: str) -> str:
+# --- expand() ---
+def expand(path: str) -> str:
     """Expand ~ in the given path."""
     return os.path.expanduser(path) if path else path
 
 
-# --- _parse_modes() ---
-def _parse_modes(env_val: str) -> Set[str]:
+# --- parse_modes() ---
+def parse_modes(env_val: str) -> Set[str]:
     """Parse VALID_MODES env var (comma-separated) into an uppercased set."""
     modes: Set[str] = set()
     for p in (env_val or "").split(","):
@@ -37,8 +37,8 @@ def _parse_modes(env_val: str) -> Set[str]:
     return modes
 
 
-# --- _load_or_init_config() ---
-def _load_or_init_config(env: Dict[str, str], valid_modes_env: str) -> Dict:
+# --- load_or_init_config() ---
+def load_or_init_config(env: Dict[str, str], valid_modes_env: str) -> Dict[str, Any]:
     """
         Load ~/.config/Spacedrop/config.json if present; else create default:
           mode="PERSONAL"
@@ -47,8 +47,8 @@ def _load_or_init_config(env: Dict[str, str], valid_modes_env: str) -> Dict:
         Returns a config dict with normalized values and
         _conf_dir/_conf_path for server reference.
     """
-    conf_dir  = _expand(env.get("CONF_DIR", "~/.config/Spacedrop"))
-    conf_path = _expand(env.get("CONF_PATH", "~/.config/Spacedrop/config.json"))
+    conf_dir  = expand(env.get("CONF_DIR", "~/.config/Spacedrop"))
+    conf_path = expand(env.get("CONF_PATH", "~/.config/Spacedrop/config.json"))
     os.makedirs(conf_dir, exist_ok=True)
 
     if os.path.isfile(conf_path):
@@ -56,9 +56,9 @@ def _load_or_init_config(env: Dict[str, str], valid_modes_env: str) -> Dict:
             cfg = json.load(f)
     else:
         personal_uid = 0
-        ip4 = _tailscale_ip4_self()
+        ip4 = tailscale_ip4_self()
         if ip4:
-            uid = _userid_from_whois_json(ip4) or _userid_from_status_by_ip(ip4)
+            uid = userid_from_whois_json(ip4) or userid_from_status_by_ip(ip4)
             if uid:
                 personal_uid = uid
         cfg = {
@@ -69,7 +69,7 @@ def _load_or_init_config(env: Dict[str, str], valid_modes_env: str) -> Dict:
         with open(conf_path, "w") as f:
             json.dump(cfg, f, indent=2)
 
-    valid_modes = _parse_modes(valid_modes_env) or {"EVERYONE","CONTACTS_ONLY","OFF","PERSONAL"}
+    valid_modes = parse_modes(valid_modes_env) or {"EVERYONE","CONTACTS_ONLY","OFF","PERSONAL"}
     mode = str(cfg.get("mode", "PERSONAL")).upper()
     if mode not in valid_modes:
         mode = "PERSONAL"

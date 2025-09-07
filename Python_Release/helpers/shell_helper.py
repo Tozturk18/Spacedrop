@@ -23,8 +23,8 @@ from typing import List, Optional
 # =========================
 
 
-# --- _run() ---
-def _run(cmd: List[str]) -> str:
+# --- run() ---
+def run(cmd: List[str]) -> str:
     """
         Run a shell command and return stdout (stripped).
         Raises CalledProcessError on failure.
@@ -32,14 +32,14 @@ def _run(cmd: List[str]) -> str:
     return subprocess.check_output(cmd, text=True).strip()
 
 
-# --- _expand() ---
-def _expand(path: str | None) -> str | None:
+# --- expand() ---
+def expand(path: str | None) -> str | None:
     """Expand ~ in the given path (or return None if path is None)."""
     return os.path.expanduser(path) if path else path
 
 
-# --- _notify() ---
-def _notify(title: str, text: str, icon_path: Optional[str] = None) -> None:
+# --- notify() ---
+def notify(title: str, text: str, icon_path: Optional[str] = None) -> None:
     """
         macOS notification with optional custom icon.
         Tries terminal-notifier for custom icon; falls back to AppleScript.
@@ -50,7 +50,7 @@ def _notify(title: str, text: str, icon_path: Optional[str] = None) -> None:
     """
     try:
         tn = shutil.which("terminal-notifier")
-        icon = _expand(icon_path) if icon_path else None
+        icon = expand(icon_path) if icon_path else None
 
         if tn:
             cmd = [tn, "-title", title, "-message", text]
@@ -69,8 +69,8 @@ def _notify(title: str, text: str, icon_path: Optional[str] = None) -> None:
         pass
 
 
-# --- _confirm() ---
-def _confirm(title: str, text: str, icon_path: Optional[str] = None, timeout_sec: int = 20) -> bool:
+# --- confirm() ---
+def confirm(title: str, text: str, icon_path: Optional[str] = None, timeout_sec: int = 20) -> bool:
     """
         Blocking Accept/Decline prompt (AppleScript dialog).
         Returns True on Accept, False on Decline/timeout/error.
@@ -78,14 +78,14 @@ def _confirm(title: str, text: str, icon_path: Optional[str] = None, timeout_sec
           • timeout_sec=0 means "no timeout".
           • Supports custom icon (PNG/ICNS) when provided.
     """
-    icon = _expand(icon_path) if icon_path else None
+    icon = expand(icon_path) if icon_path else None
 
     def esc(s: str) -> str:
         # Escape backslashes and double-quotes for AppleScript string literals
         return s.replace("\\", "\\\\").replace("\"", "\\\"")
 
     tsec = max(0, int(timeout_sec))
-    lines = []
+    lines: List[str] = []
     lines.append('set theButtons to {"Decline","Accept"}')
     lines.append(f'set theTitle to "{esc(title)}"')
     lines.append(f'set theText to "{esc(text)}"')
@@ -132,7 +132,7 @@ def _confirm(title: str, text: str, icon_path: Optional[str] = None, timeout_sec
 # --- URL helpers (NEW) ---
 _URL_RE = re.compile(r'^(https?://\S+)$', re.IGNORECASE)
 
-def _is_http_url(s: str | None) -> Optional[str]:
+def is_http_url(s: str | None) -> Optional[str]:
     """Return normalized http(s) URL if valid, else None."""
     if not s:
         return None
@@ -144,7 +144,7 @@ def _is_http_url(s: str | None) -> Optional[str]:
         return s
     return None
 
-def _extract_url_from_html(html_text: str | None) -> Optional[str]:
+def extract_url_from_html(html_text: str | None) -> Optional[str]:
     """
     Extract a likely destination URL from simple share HTML files.
     Supports:
@@ -156,18 +156,18 @@ def _extract_url_from_html(html_text: str | None) -> Optional[str]:
     # meta refresh
     m = re.search(r'http-equiv=["\']refresh["\'].*?url=([^"\'> ]+)', html_text, re.I)
     if m:
-        url = _is_http_url(m.group(1))
+        url = is_http_url(m.group(1))
         if url:
             return url
     # anchor tag
     m = re.search(r'<a[^>]+href=["\']([^"\']+)["\']', html_text, re.I)
     if m:
-        url = _is_http_url(m.group(1))
+        url = is_http_url(m.group(1))
         if url:
             return url
     return None
 
-def _open_url(url: str) -> bool:
+def open_url(url: str) -> bool:
     """
     Open a URL in the logged-in user's GUI session.
     Tries 'open' first (works if server runs in user session).
@@ -190,14 +190,14 @@ def _open_url(url: str) -> bool:
         return False
 
 
-# --- _tailscale_ip4_self() ---
-def _tailscale_ip4_self() -> Optional[str]:
+# --- tailscale_ip4_self() ---
+def tailscale_ip4_self() -> Optional[str]:
     """
         Get the first IPv4 address of the current Tailscale node.
         Returns None if not found.
     """
     try:
-        out = _run(["tailscale", "ip", "-4"])
+        out = run(["tailscale", "ip", "-4"])
         for line in out.splitlines():
             s = line.strip()
             try:
@@ -209,9 +209,7 @@ def _tailscale_ip4_self() -> Optional[str]:
         pass
     return None
 
-import os
-
-def _unique_path(directory: str, filename: str) -> str:
+def unique_path(directory: str, filename: str) -> str:
     """
     Return a non-conflicting path inside `directory` for `filename`.
     If the file exists, appends ' (1)', ' (2)', ... before the extension.

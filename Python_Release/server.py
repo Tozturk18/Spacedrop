@@ -16,7 +16,7 @@ from __future__ import annotations
 #   - Accept/Decline confirmation dialog for foreign/unknown UserIDs
 #   - Confirmation policy:
 #       * Skip only for PERSONAL mode + sender == personal_user_id
-#       * Otherwise, prompt (even in EVERYONE) if REQUIRE_CONFIRM_ON_FOREIGN=1
+#       * Otherwise, prompt (even in EVERYONE) if REQUIREconfirm_ON_FOREIGN=1
 #   - NEW: AirDrop-like behavior for links:
 #       * If POSTed 'text' is an http(s) URL → open immediately on Mac
 #       * If uploaded file is .txt/.url/.webloc or simple .html with a URL → open
@@ -36,16 +36,16 @@ from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
 from helpers.shell_helper import (
-    _notify,
-    _confirm,
-    _expand,
-    _open_url,
-    _is_http_url,
-    _extract_url_from_html,
-    _unique_path,
+    notify,
+    confirm,
+    expand,
+    open_url,
+    is_http_url,
+    extract_url_from_html,
+    unique_path,
 )
-from helpers.userid_helper import _sender_userid
-from helpers.config_helper import _load_or_init_config, _parse_modes
+from helpers.userid_helper import sender_userid
+from helpers.config_helper import load_or_init_config, parse_modes
 # =========================
 
 
@@ -56,20 +56,20 @@ ENV: Dict[str, str] = dict(os.environ)
 PORT = int(ENV.get("PORT", "8787"))
 APP_TITLE = ENV.get("APP_TITLE", "Spacedrop Server (one-way)")
 
-DOWNLOADS_DIR = _expand(ENV.get("DOWNLOADS_DIR", "~/Downloads"))
-CONF_DIR      = _expand(ENV.get("CONF_DIR", "~/.config/Spacedrop"))
-CONF_PATH     = _expand(ENV.get("CONF_PATH", "~/.config/Spacedrop/config.json"))
-VALID_MODES   = _parse_modes(ENV.get("VALID_MODES", "EVERYONE,CONTACTS_ONLY,OFF,PERSONAL"))
+DOWNLOADS_DIR = expand(ENV.get("DOWNLOADS_DIR", "~/Downloads"))
+CONF_DIR      = expand(ENV.get("CONF_DIR", "~/.config/Spacedrop"))
+CONF_PATH     = expand(ENV.get("CONF_PATH", "~/.config/Spacedrop/config.json"))
+VALID_MODES   = parse_modes(ENV.get("VALID_MODES", "EVERYONE,CONTACTS_ONLY,OFF,PERSONAL"))
 
 # Custom icon + confirmation settings
-ICON_PATH = _expand(ENV.get("ICON_PATH", "~/Spacedrop/icon.png"))
-REQUIRE_CONFIRM_ON_FOREIGN = ENV.get("REQUIRE_CONFIRM_ON_FOREIGN", "1") not in ("0","false","False","no","No")
+ICON_PATH = expand(ENV.get("ICON_PATH", "~/Spacedrop/icon.png"))
+REQUIREconfirm_ON_FOREIGN = ENV.get("REQUIREconfirm_ON_FOREIGN", "1") not in ("0","false","False","no","No")
 APPROVAL_TIMEOUT = int(ENV.get("APPROVAL_TIMEOUT", "20"))
 
 app = FastAPI(title=APP_TITLE)
 
 # -------- config --------
-CONFIG: dict[str, Any] = _load_or_init_config(ENV, ENV.get("VALID_MODES", ""))
+CONFIG: dict[str, Any] = load_or_init_config(ENV, ENV.get("VALID_MODES", ""))
 
 
 def _allowed(uid: Optional[int]) -> bool:
@@ -91,15 +91,15 @@ def _allowed(uid: Optional[int]) -> bool:
     return False
 
 
-def _maybe_confirm(uid: Optional[int]) -> bool:
+def _maybeconfirm(uid: Optional[int]) -> bool:
     """
         Confirmation policy (with CONFIRM_ON_SELF toggle):
-          • If REQUIRE_CONFIRM_ON_FOREIGN=0: never prompt.
+          • If REQUIREconfirm_ON_FOREIGN=0: never prompt.
           • If uid == personal_user_id and CONFIRM_ON_SELF=0: skip prompt (auto-accept) in all modes.
           • Else, if mode == PERSONAL and uid == personal_user_id: skip prompt (auto-accept).
           • Otherwise: prompt (EVERYONE / CONTACTS_ONLY / PERSONAL-from-others).
     """
-    if not REQUIRE_CONFIRM_ON_FOREIGN:
+    if not REQUIREconfirm_ON_FOREIGN:
         return True
 
     personal_uid = int(CONFIG.get("personal_user_id", 0) or 0)
@@ -114,7 +114,7 @@ def _maybe_confirm(uid: Optional[int]) -> bool:
         return True
 
     msg = "Unknown sender (no UserID). Accept incoming item?" if uid is None else f"Incoming item from UserID {uid}. Accept?"
-    return _confirm("Spacedrop", msg, ICON_PATH, APPROVAL_TIMEOUT)
+    return confirm("Spacedrop", msg, ICON_PATH, APPROVAL_TIMEOUT)
 
 
 # -------- API --------
@@ -129,7 +129,7 @@ def health():
         "downloads_dir": DOWNLOADS_DIR,
         "config_path": CONF_PATH,
         "app_title": APP_TITLE,
-        "require_confirm_on_foreign": REQUIRE_CONFIRM_ON_FOREIGN,
+        "requireconfirm_on_foreign": REQUIREconfirm_ON_FOREIGN,
         "approval_timeout": APPROVAL_TIMEOUT,
     }
 
@@ -138,7 +138,7 @@ def health():
 def debug_whoami(request: Request):
     """Identify the calling peer by Tailscale UserID."""
     src_ip = request.client.host
-    uid = _sender_userid(src_ip)
+    uid = sender_userid(src_ip)
     return {"src_ip": src_ip, "user_id": uid}
 
 
@@ -146,7 +146,7 @@ def debug_whoami(request: Request):
 def reload_config():
     """Reload configuration from disk."""
     global CONFIG
-    CONFIG = _load_or_init_config(ENV, ENV.get("VALID_MODES", ""))
+    CONFIG = load_or_init_config(ENV, ENV.get("VALID_MODES", ""))
     return {"ok": True, "mode": CONFIG["mode"], "personal_user_id": CONFIG["personal_user_id"]}
 
 
@@ -166,21 +166,21 @@ async def drop(
       - Else, save the file to Downloads (original behavior).
     """
     src_ip = request.client.host
-    uid = _sender_userid(src_ip)
+    uid = sender_userid(src_ip)
 
     if not _allowed(uid):
         raise HTTPException(status_code=401, detail=f"Sender not allowed (UserID={uid}) in mode {CONFIG['mode']}")
 
-    if not _maybe_confirm(uid):
+    if not _maybeconfirm(uid):
         raise HTTPException(status_code=403, detail="Declined by user (confirmation dialog)")
 
     # Case A: explicit text field (Shortcut sends shared URL as text)
     if text:
-        url = _is_http_url(text)
+        url = is_http_url(text)
         if url:
-            opened = _open_url(url)
+            opened = open_url(url)
             host = urlparse(url).netloc or url
-            _notify("Opening link", host, icon_path=ICON_PATH)
+            notify("Opening link", host, icon_path=ICON_PATH)
             return JSONResponse({"ok": True, "action": "opened_url", "url": url, "opened": bool(opened)})
 
     # Case B: file upload (e.g., .webloc, .url, .txt with URL, or basic .html)
@@ -191,30 +191,30 @@ async def drop(
         # Try URL wrappers first
         if name.endswith((".txt", ".url", ".webloc")):
             candidate = data.decode("utf-8", "ignore").strip()
-            url = _is_http_url(candidate)
+            url = is_http_url(candidate)
             if url:
-                opened = _open_url(url)
+                opened = open_url(url)
                 host = urlparse(url).netloc or url
-                _notify("Opening link", host, icon_path=ICON_PATH)
+                notify("Opening link", host, icon_path=ICON_PATH)
                 return JSONResponse({"ok": True, "action": "opened_url", "url": url, "opened": bool(opened)})
 
         if name.endswith((".html", ".htm")):
-            url = _extract_url_from_html(data.decode("utf-8", "ignore"))
+            url = extract_url_from_html(data.decode("utf-8", "ignore"))
             if url:
-                opened = _open_url(url)
+                opened = open_url(url)
                 host = urlparse(url).netloc or url
-                _notify("Opening link", host, icon_path=ICON_PATH)
+                notify("Opening link", host, icon_path=ICON_PATH)
                 return JSONResponse({"ok": True, "action": "opened_url", "url": url, "opened": bool(opened)})
 
         # Otherwise treat it as a normal file (save to Downloads)
         os.makedirs(DOWNLOADS_DIR, exist_ok=True)
         base = os.path.basename(file.filename or "untitled")
-        out_path = _unique_path(DOWNLOADS_DIR, base)
+        out_path = unique_path(DOWNLOADS_DIR, base)
         with open(out_path, "wb") as f:
             f.write(data)
 
 
-        _notify("Saved to Downloads", base, icon_path=ICON_PATH)
+        notify("Saved to Downloads", base, icon_path=ICON_PATH)
         return JSONResponse({"ok": True, "saved_as": out_path, "mode": CONFIG["mode"], "user_id": uid})
 
     # Nothing provided
@@ -229,12 +229,12 @@ async def clip_push(request: Request,
                     image: UploadFile = File(None)):
     """Push clipboard content from the phone to the Mac."""
     src_ip = request.client.host
-    uid = _sender_userid(src_ip)
+    uid = sender_userid(src_ip)
 
     if not _allowed(uid):
         raise HTTPException(status_code=401, detail=f"Sender not allowed (UserID={uid}) in mode {CONFIG['mode']}")
 
-    if not _maybe_confirm(uid):
+    if not _maybeconfirm(uid):
         raise HTTPException(status_code=403, detail="Declined by user (confirmation dialog)")
 
     kind = (kind or "text").lower()
@@ -247,7 +247,7 @@ async def clip_push(request: Request,
             subprocess.run(["pbcopy"], input=text, text=True, check=False)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to set clipboard text: {e}")
-        _notify("Clipboard updated", "Text from device", icon_path=ICON_PATH)
+        notify("Clipboard updated", "Text from device", icon_path=ICON_PATH)
         return {"ok": True, "kind": "text"}
 
     elif kind == "image":
@@ -287,7 +287,7 @@ async def clip_push(request: Request,
         try: os.unlink(tmp_path)
         except Exception: pass
 
-        _notify("Clipboard updated", "Image from device", icon_path=ICON_PATH)
+        notify("Clipboard updated", "Image from device", icon_path=ICON_PATH)
         return {"ok": True, "kind": "image"}
 
     else:

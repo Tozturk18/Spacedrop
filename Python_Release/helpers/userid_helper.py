@@ -14,12 +14,12 @@ from __future__ import annotations
 import json
 import ipaddress
 from typing import Optional, Dict, Any, List
-from helpers.shell_helper import _run
+from helpers.shell_helper import run
 # =========================
 
 
-# --- _userid_from_whois_json() ---
-def _userid_from_whois_json(ip: str) -> Optional[int]:
+# --- userid_from_whois_json() ---
+def userid_from_whois_json(ip: str) -> Optional[int]:
     """
         Preferred method to get the UserID from:
         `tailscale whois --json <ip>`
@@ -27,7 +27,7 @@ def _userid_from_whois_json(ip: str) -> Optional[int]:
         - fallback Node.User
     """
     try:
-        out = _run(["tailscale", "whois", "--json", ip])
+        out = run(["tailscale", "whois", "--json", ip])
         obj = json.loads(out)
         uid = (obj.get("UserProfile", {}).get("ID") or obj.get("Node", {}).get("User"))
         return int(uid) if uid is not None else None
@@ -35,14 +35,14 @@ def _userid_from_whois_json(ip: str) -> Optional[int]:
         return None
 
 
-# --- _userid_from_status_by_ip() ---
-def _userid_from_status_by_ip(ip: str) -> Optional[int]:
+# --- userid_from_status_by_ip() ---
+def userid_from_status_by_ip(ip: str) -> Optional[int]:
     """
         Fallback: map sender IP → node in `tailscale status --json`,
         then read the node's UserID.
     """
     try:
-        out = _run(["tailscale", "status", "--json"])
+        out = run(["tailscale", "status", "--json"])
         st = json.loads(out)
         peers: List[Dict[str, Any]] = list((st.get("Peer") or {}).values())
         self_node: Dict[str, Any] = st.get("Self") or {}
@@ -59,10 +59,10 @@ def _userid_from_status_by_ip(ip: str) -> Optional[int]:
     return None
 
 
-# --- _sender_userid() ---
-def _sender_userid(src_ip: str) -> Optional[int]:
+# --- sender_userid() ---
+def sender_userid(src_ip: str) -> Optional[int]:
     """
         Resolve sender's Tailscale UserID using whois JSON first,
         then fall back to status JSON.
     """
-    return _userid_from_whois_json(src_ip) or _userid_from_status_by_ip(src_ip)
+    return userid_from_whois_json(src_ip) or userid_from_status_by_ip(src_ip)

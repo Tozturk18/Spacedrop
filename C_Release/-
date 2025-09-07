@@ -1,0 +1,4 @@
+127.0.0.1 - - [07/Sep/2025:15:53:54 -0400] "GET / HTTP/1.1" 1 101 - Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36
+127.0.0.1 - - [07/Sep/2025:15:53:54 -0400] "GET /favicon.ico HTTP/1.1" 1 101 http://localhost:8787/ Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36
+127.0.0.1 - - [07/Sep/2025:15:54:10 -0400] "GET /health HTTP/1.1" 1 134 - Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36
+127.0.0.1 - - [07/Sep/2025:15:54:10 -0400] "GET /favicon.ico HTTP/1.1" 1 101 http://localhost:8787/health Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36
