@@ -1,0 +1,3 @@
+[submodule "C_Release/third_party/civetweb"]
+	path = C_Release/third_party/civetweb
+	url = https://github.com/civetweb/civetweb.git
