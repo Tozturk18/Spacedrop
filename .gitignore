@@ -135,7 +135,7 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
+#.env # The environment file does not contain any sensitive information
 .envrc
 .venv
 env/
