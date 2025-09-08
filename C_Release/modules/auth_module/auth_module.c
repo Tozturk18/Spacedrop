@@ -7,10 +7,17 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <errno.h>
-
 #include <civetweb.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 
-/* =============== small utils =============== */
+
+/* env helpers for config path overrides */
+#include "modules/env_module/env_module.h"
+
+/* =========================================================================
+ * Small file + string utilities
+ * ========================================================================= */
 
 static char *expand_home(const char *path) {
     if (!path) return NULL;
@@ -19,16 +26,11 @@ static char *expand_home(const char *path) {
         if (!home) home = "";
         size_t n = strlen(home) + strlen(path);
         char *out = (char *)malloc(n);
+        if (!out) return NULL;
         snprintf(out, n, "%s%s", home, path + 1);
         return out;
     }
     return strdup(path);
-}
-
-static int ensure_dir(const char *dir) {
-    struct stat st;
-    if (stat(dir, &st) == 0) return S_ISDIR(st.st_mode);
-    return mkdir(dir, 0755) == 0;
 }
 
 static char *slurp_file(const char *path) {
@@ -46,6 +48,19 @@ static char *slurp_file(const char *path) {
 }
 
 static int spit_file(const char *path, const char *s) {
+    /* ensure parent dir exists */
+    char *dup = strdup(path);
+    if (!dup) return 0;
+    char *slash = strrchr(dup, '/');
+    if (slash) {
+        *slash = '\0';
+        struct stat st;
+        if (stat(dup, &st) != 0) {
+            (void)mkdir(dup, 0755);
+        }
+    }
+    free(dup);
+
     FILE *f = fopen(path, "wb");
     if (!f) return 0;
     size_t n = fwrite(s, 1, strlen(s), f);
@@ -53,12 +68,13 @@ static int spit_file(const char *path, const char *s) {
     return n == strlen(s);
 }
 
-/* =============== tiny JSON helpers (not general-purpose; just enough) =============== */
+/* =========================================================================
+ * Minimal JSON helpers (targeted to our config + tailscale JSON)
+ * ========================================================================= */
 
-static char *json_find_str_value(const char *json, const char *key) {
-    // returns malloc'd value without quotes on success; NULL otherwise
-    if (!json || !key) return NULL;
-    const char *k = strstr(json, key);
+static char *json_find_str_value(const char *json, const char *key_with_quotes) {
+    if (!json || !key_with_quotes) return NULL;
+    const char *k = strstr(json, key_with_quotes);
     if (!k) return NULL;
     k = strchr(k, ':');
     if (!k) return NULL;
@@ -69,14 +85,15 @@ static char *json_find_str_value(const char *json, const char *key) {
     if (!end) return NULL;
     size_t len = (size_t)(end - k);
     char *out = (char *)malloc(len + 1);
+    if (!out) return NULL;
     memcpy(out, k, len);
     out[len] = 0;
     return out;
 }
 
-static long long json_find_ll_value(const char *json, const char *key) {
-    if (!json || !key) return 0;
-    const char *k = strstr(json, key);
+static long long json_find_ll_value(const char *json, const char *key_with_quotes) {
+    if (!json || !key_with_quotes) return 0;
+    const char *k = strstr(json, key_with_quotes);
     if (!k) return 0;
     k = strchr(k, ':');
     if (!k) return 0;
@@ -86,16 +103,15 @@ static long long json_find_ll_value(const char *json, const char *key) {
     return v;
 }
 
-static int json_contains_ll_in_array(const char *json, const char *array_key, long long needle) {
-    // naive: look for array_key then scan digits inside [...]
-    const char *p = strstr(json, array_key);
+static int json_contains_ll_in_array(const char *json, const char *array_key_with_quotes, long long needle) {
+    const char *p = strstr(json, array_key_with_quotes);
     if (!p) return 0;
     p = strchr(p, '[');
     if (!p) return 0;
     const char *q = strchr(p, ']');
     if (!q) return 0;
     while (p < q) {
-        if (isdigit((unsigned char)*p)) {
+        if (isdigit((unsigned char)*p) || (*p=='-' && isdigit((unsigned char)p[1]))) {
             long long v = strtoll(p, (char **)&p, 10);
             if (v == needle) return 1;
         } else {
@@ -105,7 +121,9 @@ static int json_contains_ll_in_array(const char *json, const char *array_key, lo
     return 0;
 }
 
-/* =============== tailscale helpers =============== */
+/* =========================================================================
+ * Shell exec helpers for tailscale
+ * ========================================================================= */
 
 static char *run_cmd_capture(const char *cmd) {
     FILE *fp = popen(cmd, "r");
@@ -119,6 +137,7 @@ static char *run_cmd_capture(const char *cmd) {
             cap = cap ? cap * 2 : 2048;
             if (cap < len + n + 1) cap = len + n + 1;
             buf = (char *)realloc(buf, cap);
+            if (!buf) { pclose(fp); return NULL; }
         }
         memcpy(buf + len, tmp, n);
         len += n;
@@ -131,11 +150,12 @@ static char *run_cmd_capture(const char *cmd) {
 static char *tailscale_self_ipv4(void) {
     char *out = run_cmd_capture("tailscale ip -4");
     if (!out) return NULL;
-    // trim at first newline
-    out[strcspn(out, "\r\n")] = 0;
+    char *nl = strpbrk(out, "\r\n");
+    if (nl) *nl = 0;
     return out;
 }
 
+/* whois JSON → UserProfile.ID (fallback Node.User) */
 static long long tailscale_user_id_for_ip(const char *ip4) {
     if (!ip4 || !*ip4) return 0;
     char cmd[256];
@@ -143,55 +163,119 @@ static long long tailscale_user_id_for_ip(const char *ip4) {
     char *json = run_cmd_capture(cmd);
     if (!json) return 0;
 
-    // Prefer UserProfile.ID, fallback to Node.User
-    long long id = json_find_ll_value(json, "\"UserProfile\"") ? json_find_ll_value(json, "\"ID\"") : 0;
-    if (!id) {
-        id = json_find_ll_value(json, "\"User\"");
+    long long uid = 0;
+    const char *up = strstr(json, "\"UserProfile\"");
+    if (up) {
+        const char *idk = strstr(up, "\"ID\"");
+        if (idk) {
+            uid = json_find_ll_value(idk, "\"ID\"");
+        }
     }
+    if (!uid) uid = json_find_ll_value(json, "\"User\"");
     free(json);
-    return id;
+    return uid;
 }
 
-/* =============== config handling =============== */
+/* Fallback: status --json → map ip to node → node.UserID */
+static long long tailscale_user_id_from_status_by_ip(const char *ip4) {
+    if (!ip4 || !*ip4) return 0;
+    char *json = run_cmd_capture("tailscale status --json");
+    if (!json) return 0;
+
+    long long uid = 0;
+    const char *p = json;
+    while ((p = strstr(p, "\"TailscaleIPs\"")) != NULL) {
+        const char *arr = strchr(p, '[');
+        const char *end = arr ? strchr(arr, ']') : NULL;
+        if (!arr || !end) { p += 14; continue; }
+
+        if (memmem(arr, (size_t)(end - arr), ip4, strlen(ip4)) != NULL) {
+            const char *obj = arr;
+            while (obj > json && *obj != '{') obj--;
+            const char *k = strstr(obj, "\"UserID\"");
+            if (k && k < end) {
+                k = strchr(k, ':');
+                if (k) {
+                    while (*k && (*k==':' || isspace((unsigned char)*k))) k++;
+                    uid = strtoll(k, NULL, 10);
+                }
+            }
+            break;
+        }
+        p = end + 1;
+    }
+    free(json);
+    return uid;
+}
+
+/* =========================================================================
+ * Config handling (env-aware)
+ * ========================================================================= */
 
 static char *g_cfg_path = NULL;
-static char *g_cfg_json = NULL;       // raw JSON text
-static char  g_mode[24] = "EVERYONE"; // cached
+static char *g_cfg_json = NULL;
+static char  g_mode[24] = "EVERYONE";
 static long long g_personal_id = 0;
 
-static const char *CONFIG_DIR  = "~/.config/spacedrop";
-static const char *CONFIG_FILE = "~/.config/spacedrop/config.json";
-
+/* Load existing config or create a fresh one.
+   Path precedence:
+     1) SPACEDROP_CONFIG (full path)
+     2) SPACEDROP_CONF_PATH (full path)
+     3) SPACEDROP_CONF_DIR + "/config.json"
+     4) default "~/.config/spacedrop/config.json"
+*/
 static int config_load_or_create(void) {
-    if (!g_cfg_path) g_cfg_path = expand_home(CONFIG_FILE);
+    if (!g_cfg_path) {
+        char *p_full = env_get_path_expanded("SPACEDROP_CONFIG", NULL);
+        if (!p_full) p_full = env_get_path_expanded("SPACEDROP_CONF_PATH", NULL);
 
-    // try load existing
+        if (p_full) {
+            g_cfg_path = p_full;
+        } else {
+            char *dir = env_get_path_expanded("SPACEDROP_CONF_DIR", "~/.config/spacedrop");
+            if (!dir) return 0;
+            size_t cap = strlen(dir) + 1 + strlen("config.json") + 1;
+            g_cfg_path = (char*)malloc(cap);
+            if (!g_cfg_path) { free(dir); return 0; }
+            snprintf(g_cfg_path, cap, "%s/%s", dir, "config.json");
+            free(dir);
+        }
+    }
+
+    /* Try existing file */
     g_cfg_json = slurp_file(g_cfg_path);
     if (g_cfg_json) {
-        // cache important fields
         char *mode = json_find_str_value(g_cfg_json, "\"mode\"");
         if (mode) { snprintf(g_mode, sizeof(g_mode), "%s", mode); free(mode); }
         g_personal_id = json_find_ll_value(g_cfg_json, "\"personal_user_id\"");
         return 1;
     }
 
-    // create new config
-    char *dir = expand_home(CONFIG_DIR);
-    if (!ensure_dir(dir)) { free(dir); return 0; }
-    free(dir);
+    /* Need to create a new config */
+    char *dir_only = strdup(g_cfg_path);
+    if (!dir_only) return 0;
+    char *slash = strrchr(dir_only, '/');
+    if (slash) { *slash = '\0'; }
+    if (*dir_only) {
+        struct stat st;
+        if (stat(dir_only, &st) != 0) (void)mkdir(dir_only, 0755);
+    }
+    free(dir_only);
 
-    // discover self user id
+    /* Discover self user id via tailscale (ip → whois → status fallback) */
     char *ip = tailscale_self_ipv4();
     long long uid = ip ? tailscale_user_id_for_ip(ip) : 0;
+    if (!uid && ip) uid = tailscale_user_id_from_status_by_ip(ip);
 
-    // write default config
+    /* Default initial config */
     char buf[256];
-    int n = snprintf(buf, sizeof(buf),
+    snprintf(buf, sizeof(buf),
         "{\n"
         "  \"mode\": \"EVERYONE\",\n"
         "  \"personal_user_id\": %lld,\n"
         "  \"contacts_user_ids\": []\n"
         "}\n", uid);
+
     if (!spit_file(g_cfg_path, buf)) return 0;
 
     g_cfg_json = slurp_file(g_cfg_path);
@@ -203,7 +287,7 @@ static int config_load_or_create(void) {
 int auth_init(void) {
     int ok = config_load_or_create();
     if (!ok) {
-        // fail open: default EVERYONE if config missing
+        /* fail-open to EVERYONE if config load/create fails */
         snprintf(g_mode, sizeof(g_mode), "EVERYONE");
         g_personal_id = 0;
     }
@@ -214,20 +298,40 @@ const char *auth_mode_str(void) {
     return g_mode;
 }
 
-/* =============== connection evaluation =============== */
+/* =========================================================================
+ * Remote IP → user mapping + allow/deny
+ * ========================================================================= */
+
+#ifndef MG_SOCK_STRINGIFY_IP
+#define MG_SOCK_STRINGIFY_IP 1
+#endif
 
 static int remote_ip_to_string(struct mg_connection *conn, char *buf, size_t buflen) {
-    // CivetWeb 1.16: request_info->remote_addr contains IP bytes.
+    if (!conn || !buf || buflen < 8) return 0;
+
     const struct mg_request_info *ri = mg_get_request_info(conn);
     if (!ri) return 0;
 
-    // ri->remote_addr is a string (const char *) in CivetWeb
-    if (strchr(ri->remote_addr, ':')) {
-        // Contains ':' → likely IPv6; skip whois.
-        return 0;
-    }
+    /* Legacy CivetWeb: remote_addr is a char[48] already containing the IP (no port). */
+    if (ri->remote_addr[0] == '\0') return 0;
+
+    /* Copy and ensure NUL-termination */
     snprintf(buf, buflen, "%s", ri->remote_addr);
+
+    /* Defensive: strip IPv6 scope id if ever present (unlikely in legacy field) */
+    char *pct = strchr(buf, '%');
+    if (pct) *pct = '\0';
+
     return 1;
+}
+
+
+
+static int is_loopback_ip_str(const char *ip) {
+    if (!ip) return 0;
+    if (!strncmp(ip, "127.", 4)) return 1; /* 127.0.0.0/8 */
+    if (!strcmp(ip, "::1")) return 1;      /* IPv6 loopback */
+    return 0;
 }
 
 static int is_allowed_user_id(long long uid_from_request) {
@@ -239,35 +343,44 @@ static int is_allowed_user_id(long long uid_from_request) {
     if (strcasecmp(g_mode, "CONTACTS_ONLY") == 0) {
         if (uid_from_request == 0) return 0;
         if (g_personal_id && uid_from_request == g_personal_id) return 1;
-        // check contacts array
         return json_contains_ll_in_array(g_cfg_json, "\"contacts_user_ids\"", uid_from_request);
     }
-    // unknown mode → be conservative
-    return 0;
+    return 0; /* unknown mode → deny */
 }
 
 int auth_is_allowed_conn(struct mg_connection *conn, long long *out_user_id) {
     if (out_user_id) *out_user_id = 0;
 
-    // EVERYONE: fast-path allow even if whois fails
+    /* EVERYONE: always allow; still try to resolve for logging */
     if (strcasecmp(g_mode, "EVERYONE") == 0) {
-        // Try to record the caller if possible (but don't block)
         char ip[64];
         if (remote_ip_to_string(conn, ip, sizeof(ip))) {
             long long uid = tailscale_user_id_for_ip(ip);
+            if (!uid) uid = tailscale_user_id_from_status_by_ip(ip);
             if (out_user_id) *out_user_id = uid;
         }
         return 1;
     }
 
-    // For other modes, resolve caller’s Tailscale User ID
-    char ip[64];
+    /* Resolve caller */
+    char ip[64] = {0};
     if (!remote_ip_to_string(conn, ip, sizeof(ip))) {
         return 0;
     }
-    long long uid = tailscale_user_id_for_ip(ip);
+
+    long long uid = 0;
+
+    /* Localhost → treat as self (parity with Python behavior) */
+    if (is_loopback_ip_str(ip)) {
+        uid = g_personal_id;
+    } else {
+        /* Tailscale whois first, then status fallback */
+        uid = tailscale_user_id_for_ip(ip);
+        if (!uid) uid = tailscale_user_id_from_status_by_ip(ip);
+    }
+
     if (out_user_id) *out_user_id = uid;
-    if (uid == 0) return 0;
+    if (!uid) return 0; /* unresolvable → deny (except EVERYONE) */
 
     return is_allowed_user_id(uid);
 }

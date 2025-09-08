@@ -9,9 +9,7 @@
 
 static char *strtrim(char *s) {
     if (!s) return s;
-    // left trim
     while (*s && isspace((unsigned char)*s)) s++;
-    // right trim
     char *end = s + strlen(s);
     while (end > s && isspace((unsigned char)end[-1])) --end;
     *end = '\0';
@@ -23,8 +21,7 @@ static char *strip_quotes(char *s) {
     size_t n = strlen(s);
     if (n >= 2) {
         char a = s[0], b = s[n - 1];
-        if ((a == '"'  && b == '"') ||
-            (a == '\'' && b == '\'')) {
+        if ((a == '"'  && b == '"') || (a == '\'' && b == '\'')) {
             s[n - 1] = '\0';
             return s + 1;
         }
@@ -34,10 +31,8 @@ static char *strip_quotes(char *s) {
 
 static int set_env_kv(const char *key, const char *val, int overwrite) {
 #if defined(_WIN32)
-    // Windows _putenv_s copies the value
     return _putenv_s(key, val ? val : "") == 0 ? 1 : 0;
 #else
-    // POSIX setenv copies the value (safe to pass stack strings)
     return setenv(key, val ? val : "", overwrite ? 1 : 0) == 0 ? 1 : 0;
 #endif
 }
@@ -53,15 +48,12 @@ int env_load_file(const char *path, int overwrite) {
     char line[1024];
 
     while (fgets(line, sizeof(line), f)) {
-        // Strip newline
         line[strcspn(line, "\r\n")] = 0;
 
-        // Skip blanks & comments
         char *p = line;
         while (*p && isspace((unsigned char)*p)) p++;
         if (*p == '\0' || *p == '#') continue;
 
-        // Find KEY=VALUE
         char *eq = strchr(p, '=');
         if (!eq) continue;
         *eq = '\0';
@@ -71,11 +63,9 @@ int env_load_file(const char *path, int overwrite) {
 
         if (*key == '\0') continue;
 
-        // Respect overwrite flag
 #if !defined(_WIN32)
         if (!overwrite && getenv(key) != NULL) continue;
 #else
-        // _dupenv_s to check existence on Windows; skip complexity here
         if (!overwrite) {
             char *dummy = getenv(key);
             if (dummy) continue;
@@ -95,4 +85,44 @@ int env_load_default(void) {
 const char *env_get(const char *key, const char *defval) {
     const char *v = key ? getenv(key) : NULL;
     return (v && *v) ? v : (defval ? defval : "");
+}
+
+/* ---- type helpers ------------------------------------------------------- */
+
+int env_get_int(const char *key, int defval) {
+    const char *v = env_get(key, NULL);
+    if (!v || !*v) return defval;
+    char *end = NULL;
+    long n = strtol(v, &end, 10);
+    if (!end || *end != '\0') return defval;
+    return (int)n;
+}
+
+int env_get_bool(const char *key, int defval) {
+    const char *v = env_get(key, NULL);
+    if (!v || !*v) return defval;
+    if (!strcasecmp(v, "1") || !strcasecmp(v, "true") || !strcasecmp(v, "yes") || !strcasecmp(v, "on"))  return 1;
+    if (!strcasecmp(v, "0") || !strcasecmp(v, "false")|| !strcasecmp(v, "no")  || !strcasecmp(v, "off")) return 0;
+    return defval;
+}
+
+/* Expand "~" using HOME. Caller must free the returned pointer. */
+static char *expand_home(const char *path) {
+    if (!path) return NULL;
+    if (path[0] == '~') {
+        const char *home = getenv("HOME");
+        if (!home) home = "";
+        size_t len = strlen(home) + strlen(path);
+        char *out = (char*)malloc(len);
+        if (!out) return NULL;
+        snprintf(out, len, "%s%s", home, path + 1);
+        return out;
+    }
+    return strdup(path);
+}
+
+char *env_get_path_expanded(const char *key, const char *defval) {
+    const char *raw = env_get(key, defval);
+    if (!raw || !*raw) return NULL;
+    return expand_home(raw);
 }

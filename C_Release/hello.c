@@ -22,6 +22,7 @@
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include <civetweb.h>
 
 // Local Imports
@@ -29,6 +30,7 @@
 #include "modules/pages_module/pages_module.h"
 #include "modules/drop_module/drop_module.h"
 #include "modules/auth_module/auth_module.h"
+#include "modules/clip_module/clip_module.h"
 /* --- End of Imports --- */
 
 // Global running flag for graceful shutdown
@@ -63,24 +65,38 @@ int main(void) {
     auth_init();
     printf("Auth mode: %s\n", auth_mode_str());
 
-    // Resolve CivetWeb options from env with sensible defaults
-    const char *port        = env_get("SPACEDROP_PORT",        "8080");
-    const char *doc_root    = env_get("SPACEDROP_DOCROOT",     ".");
-    const char *threads     = env_get("SPACEDROP_THREADS",     "2");
-    const char *keep_alive  = env_get("SPACEDROP_KEEP_ALIVE",  "no");
-    const char *access_log  = env_get("SPACEDROP_ACCESS_LOG",  "-");
-    const char *error_log   = env_get("SPACEDROP_ERROR_LOG",   "-");
+    // Resolve HTTP options
+    int   thrs              = env_get_int("SPACEDROP_THREADS",      2);
+    int   keep_alive        = env_get_bool("SPACEDROP_KEEP_ALIVE",  0);
+    const char *port        = env_get("SPACEDROP_PORT",             "8080");
+    const char *doc_root    = env_get("SPACEDROP_DOCROOT",          ".");
+    const char *access_log  = env_get("SPACEDROP_ACCESS_LOG",       "-");
+    const char *error_log   = env_get("SPACEDROP_ERROR_LOG",        "-");
+    int debug               = env_get_bool("SPACEDROP_DEBUG",       0);
 
-    // CivetWeb options
+    // Convert typed values back to strings for CivetWeb (expects string options)
+    char thrs_s[16]; snprintf(thrs_s, sizeof(thrs_s), "%d", thrs);
+    const char *ka_s = keep_alive ? "yes" : "no";
+
     const char *options[] = {
         "listening_ports",   port,
         "document_root",     doc_root,
-        "num_threads",       threads,
-        "enable_keep_alive", keep_alive,
+        "num_threads",       thrs_s,
+        "enable_keep_alive", ka_s,
         "access_log_file",   access_log,
         "error_log_file",    error_log,
         NULL
     };
+
+
+    if (debug) {
+        char *conf_path = env_get_path_expanded("SPACEDROP_CONFIG", NULL);
+        if (!conf_path) conf_path = env_get_path_expanded("SPACEDROP_CONF_PATH", NULL);
+        if (!conf_path) conf_path = env_get_path_expanded("SPACEDROP_CONF_DIR", "~/.config/spacedrop");
+        printf("[debug] Port=%s Threads=%s KeepAlive=%s DocRoot=%s\n", port, thrs_s, ka_s, doc_root);
+        printf("[debug] AccessLog=%s ErrorLog=%s\n", access_log, error_log);
+        if (conf_path) { printf("[debug] Config=%s\n", conf_path); free(conf_path); }
+    }
 
     // Start CivetWeb
     struct mg_callbacks callbacks;
@@ -96,6 +112,7 @@ int main(void) {
     // Setup request handlers
     setup_handlers(ctx);
     drop_setup_handlers(ctx);
+    clip_setup_handlers(ctx);
 
     // Main loop
     printf("Spacedrop C running on http://localhost:%s  (Ctrl+C to stop)\n", port);

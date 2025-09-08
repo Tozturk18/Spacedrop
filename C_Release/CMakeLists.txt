@@ -107,6 +107,7 @@ add_executable(hello
   "${CMAKE_SOURCE_DIR}/modules/pages_module/pages_module.c"
   "${CMAKE_SOURCE_DIR}/modules/drop_module/drop_module.c"
   "${CMAKE_SOURCE_DIR}/modules/auth_module/auth_module.c"
+  "${CMAKE_SOURCE_DIR}/modules/clip_module/clip_module.c"
 )
 
 target_include_directories(hello PRIVATE
