@@ -27,6 +27,8 @@
 // Local Imports
 #include "modules/env_module/env_module.h"
 #include "modules/pages_module/pages_module.h"
+#include "modules/drop_module/drop_module.h"
+#include "modules/auth_module/auth_module.h"
 /* --- End of Imports --- */
 
 // Global running flag for graceful shutdown
@@ -56,6 +58,10 @@ int main(void) {
     } else {
         printf("No .env file found (continuing with defaults)\n");
     }
+
+    // Init auth (creates config.json on first run)
+    auth_init();
+    printf("Auth mode: %s\n", auth_mode_str());
 
     // Resolve CivetWeb options from env with sensible defaults
     const char *port        = env_get("SPACEDROP_PORT",        "8080");
@@ -89,6 +95,7 @@ int main(void) {
 
     // Setup request handlers
     setup_handlers(ctx);
+    drop_setup_handlers(ctx);
 
     // Main loop
     printf("Spacedrop C running on http://localhost:%s  (Ctrl+C to stop)\n", port);
