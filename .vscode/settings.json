@@ -1,7 +1,0 @@
-{
-    "files.associations": {
-        "*.html": "html",
-        ".dockerignore": "properties",
-        "env_module.h": "c"
-    }
-}
